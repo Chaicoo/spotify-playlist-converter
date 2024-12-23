@@ -5,4 +5,5 @@ use Illuminate\Support\Facades\Route;
 
 use App\Http\Controllers\PlaylistController;
 
+Route::post('/search-playlist', [PlaylistController::class, 'searchPlaylist']);
 Route::post('/convert', [PlaylistController::class, 'convert']);
