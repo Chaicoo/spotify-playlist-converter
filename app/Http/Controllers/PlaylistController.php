@@ -22,16 +22,13 @@ class PlaylistController extends Controller
             return response()->json(['error' => 'Invalid Spotify URL'], 400);
         }
 
-        // Extrair o ID da playlist do URL
         $playlistId = $this->extractPlaylistId($spotifyUrl);
         if (!$playlistId) {
             return response()->json(['error' => 'Invalid Spotify Playlist URL'], 400);
         }
 
-        // Obter músicas da playlist do Spotify
         $spotifyTracks = $this->getSpotifyTracks($playlistId);
 
-        // Buscar no YouTube
         $youtubeLinks = $this->searchYouTube($spotifyTracks);
 
         return response()->json(['youtube_links' => $youtubeLinks]);
@@ -42,23 +39,23 @@ class PlaylistController extends Controller
         $spotifyUrl = $request->input('spotify_url');
         $playlistTitle = $request->input('playlist_title', 'Converted Playlist');
 
+        // var_dump($request->all());
+        // var_dump(file_get_contents('php://input'));
+        // exit;
+
         if (!$spotifyUrl) {
             return response()->json(['error' => 'Invalid Spotify URL'], 400);
         }
 
-        // Extrair o ID da playlist do URL
         $playlistId = $this->extractPlaylistId($spotifyUrl);
         if (!$playlistId) {
             return response()->json(['error' => 'Invalid Spotify Playlist URL'], 400);
         }
 
-        // Obter músicas da playlist do Spotify
         $spotifyTracks = $this->getSpotifyTracks($playlistId);
 
-        // Buscar no YouTube
         $youtubeLinks = $this->searchYouTube($spotifyTracks);
 
-        // Criar a playlist no YouTube
         $youtubePlaylistId = $this->createYouTubePlaylist($playlistTitle, $youtubeLinks);
 
         return response()->json(['youtube_playlist_url' => "https://www.youtube.com/playlist?list={$youtubePlaylistId}"]);
@@ -66,9 +63,9 @@ class PlaylistController extends Controller
 
     private function extractPlaylistId($url)
     {
-        preg_match('/playlist\/([a-zA-Z0-9]+)/', $url, $matches);
+        preg_match('/playlist\/([^\/\?]+)/', $url, $matches);
         return $matches[1] ?? null;
-    }
+    }    
 
     private function getSpotifyTracks($playlistId)
     {
@@ -142,14 +139,12 @@ class PlaylistController extends Controller
         $client->addScope("https://www.googleapis.com/auth/youtube");
         $client->setAccessType('offline');
 
-        // Obter o token de acesso OAuth 2.0
         $accessToken = $this->getOAuthToken($client);
 
         $client->setAccessToken($accessToken);
 
         $youtube = new GoogleYouTube($client);
 
-        // Criar a playlist no YouTube
         $playlistSnippet = new YouTubePlaylistSnippet();
         $playlistSnippet->setTitle($title);
         $playlistSnippet->setDescription("Playlist converted from Spotify");
@@ -164,7 +159,6 @@ class PlaylistController extends Controller
         $createdPlaylist = $youtube->playlists->insert('snippet,status', $playlist);
         $playlistId = $createdPlaylist->getId();
 
-        // Adicionar vídeos à playlist
         foreach ($youtubeLinks as $videoUrl) {
             $videoId = preg_replace('/https:\/\/www\.youtube\.com\/watch\?v=/', '', $videoUrl);
 
@@ -186,15 +180,12 @@ class PlaylistController extends Controller
 
     private function getOAuthToken($client)
     {
-        // Verificar se o token está salvo na sessão
         if (!session()->has('youtube_access_token')) {
-            // Redirecionar o usuário para autenticar no Google
             if (!request()->has('code')) {
                 $authUrl = $client->createAuthUrl();
                 return redirect()->to($authUrl)->send();
             }
 
-            // Obter o token de acesso usando o código de autenticação retornado pelo Google
             $accessToken = $client->fetchAccessTokenWithAuthCode(request()->input('code'));
             session(['youtube_access_token' => $accessToken]);
         }
