@@ -6,7 +6,7 @@
 </head>
 
 <body>
-    <form method="POST" action="{{ route('convert') }}">
+    <form method="POST" action="{{ route('convert') }}" enctype="application/x-www-form-urlencoded">
         @csrf
 
         <label for="spotify_url">Spotify URL:</label>

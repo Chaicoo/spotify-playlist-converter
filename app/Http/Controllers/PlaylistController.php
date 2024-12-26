@@ -28,7 +28,6 @@ class PlaylistController extends Controller
         }
 
         $spotifyTracks = $this->getSpotifyTracks($playlistId);
-
         $youtubeLinks = $this->searchYouTube($spotifyTracks);
 
         return response()->json(['youtube_links' => $youtubeLinks]);
@@ -39,13 +38,22 @@ class PlaylistController extends Controller
         $spotifyUrl = $request->input('spotify_url');
         $playlistTitle = $request->input('playlist_title', 'Converted Playlist');
 
-        // var_dump($request->all());
-        // var_dump(file_get_contents('php://input'));
-        // exit;
+        if (!$spotifyUrl) {
+            $spotifyUrl = session('spotify_url');
+        }
+
+        if (!$playlistTitle) {
+            $playlistTitle = session('playlist_title', 'Converted Playlist');
+        }
 
         if (!$spotifyUrl) {
             return response()->json(['error' => 'Invalid Spotify URL'], 400);
         }
+
+        session([
+            'spotify_url' => $spotifyUrl,
+            'playlist_title' => $playlistTitle,
+        ]);
 
         $playlistId = $this->extractPlaylistId($spotifyUrl);
         if (!$playlistId) {
@@ -53,19 +61,20 @@ class PlaylistController extends Controller
         }
 
         $spotifyTracks = $this->getSpotifyTracks($playlistId);
-
         $youtubeLinks = $this->searchYouTube($spotifyTracks);
 
         $youtubePlaylistId = $this->createYouTubePlaylist($playlistTitle, $youtubeLinks);
 
-        return response()->json(['youtube_playlist_url' => "https://www.youtube.com/playlist?list={$youtubePlaylistId}"]);
+        return response()->json([
+            'youtube_playlist_url' => "https://www.youtube.com/playlist?list={$youtubePlaylistId}"
+        ]);
     }
 
     private function extractPlaylistId($url)
     {
         preg_match('/playlist\/([^\/\?]+)/', $url, $matches);
         return $matches[1] ?? null;
-    }    
+    }
 
     private function getSpotifyTracks($playlistId)
     {
@@ -118,7 +127,6 @@ class PlaylistController extends Controller
             ]);
 
             $data = json_decode($response->getBody(), true);
-
             if (!empty($data['items'])) {
                 $videoId = $data['items'][0]['id']['videoId'] ?? null;
                 if ($videoId) {
