@@ -63,10 +63,14 @@ class PlaylistController extends Controller
         $spotifyTracks = $this->getSpotifyTracks($playlistId);
         $youtubeLinks = $this->searchYouTube($spotifyTracks);
 
-        $youtubePlaylistId = $this->createYouTubePlaylist($playlistTitle, $youtubeLinks);
+        $authResponse = $this->createYouTubePlaylist($playlistTitle, $youtubeLinks);
+
+        if ($authResponse instanceof \Illuminate\Http\RedirectResponse) {
+            return $authResponse;
+        }
 
         return response()->json([
-            'youtube_playlist_url' => "https://www.youtube.com/playlist?list={$youtubePlaylistId}"
+            'youtube_playlist_url' => "https://www.youtube.com/playlist?list={$authResponse}"
         ]);
     }
 
@@ -147,9 +151,13 @@ class PlaylistController extends Controller
         $client->addScope("https://www.googleapis.com/auth/youtube");
         $client->setAccessType('offline');
 
-        $accessToken = $this->getOAuthToken($client);
+        $authResponse = $this->getOAuthToken($client);
 
-        $client->setAccessToken($accessToken);
+        if (is_string($authResponse)) {
+            return response()->json(['redirect_url' => $authResponse]);
+        }
+
+        $client->setAccessToken($authResponse);
 
         $youtube = new GoogleYouTube($client);
 
@@ -186,16 +194,32 @@ class PlaylistController extends Controller
         return $playlistId;
     }
 
+    public function handleGoogleCallback(Request $request)
+    {
+        $client = new \Google_Client();
+        $client->setClientId(env('GOOGLE_CLIENT_ID'));
+        $client->setClientSecret(env('GOOGLE_CLIENT_SECRET'));
+        $client->setRedirectUri(env('GOOGLE_REDIRECT_URI'));
+
+        if ($request->has('code')) {
+            $accessToken = $client->fetchAccessTokenWithAuthCode($request->input('code'));
+            session(['youtube_access_token' => $accessToken]);
+
+            return redirect('/test-convert')->with('success', 'YouTube authenticated successfully!');
+        }
+
+        return redirect('/')->withErrors('Failed to authenticate with YouTube.');
+    }
+
     private function getOAuthToken($client)
     {
         if (!session()->has('youtube_access_token')) {
             if (!request()->has('code')) {
                 $authUrl = $client->createAuthUrl();
-                return redirect()->to($authUrl)->send();
+                return $authUrl;
             }
 
-            $accessToken = $client->fetchAccessTokenWithAuthCode(request()->input('code'));
-            session(['youtube_access_token' => $accessToken]);
+            return null;
         }
 
         return session('youtube_access_token');
