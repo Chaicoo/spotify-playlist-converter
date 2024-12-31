@@ -35,43 +35,34 @@ class PlaylistController extends Controller
 
     public function convert(Request $request)
     {
-        $spotifyUrl = $request->input('spotify_url');
-        $playlistTitle = $request->input('playlist_title', 'Converted Playlist');
+        try {
+            $spotifyUrl = $request->input('spotify_url');
+            $playlistTitle = $request->input('playlist_title', 'Converted Playlist');
 
-        if (!$spotifyUrl) {
-            $spotifyUrl = session('spotify_url');
+            if (!$spotifyUrl) {
+                return response()->json(['error' => 'Invalid Spotify URL'], 400);
+            }
+
+            $playlistId = $this->extractPlaylistId($spotifyUrl);
+            if (!$playlistId) {
+                return response()->json(['error' => 'Invalid Spotify Playlist URL'], 400);
+            }
+
+            $spotifyTracks = $this->getSpotifyTracks($playlistId);
+            $youtubeLinks = $this->searchYouTube($spotifyTracks);
+
+            $response = $this->createYouTubePlaylist($playlistTitle, $youtubeLinks);
+
+            if ($response instanceof \Illuminate\Http\JsonResponse) {
+                return $response;
+            }
+
+            return response()->json([
+                'youtube_playlist_url' => "https://www.youtube.com/playlist?list={$response}"
+            ]);
+        } catch (\Exception $e) {
+            return response()->json(['error' => $e->getMessage()], 500);
         }
-
-        if (!$playlistTitle) {
-            $playlistTitle = session('playlist_title', 'Converted Playlist');
-        }
-
-        if (!$spotifyUrl) {
-            return response()->json(['error' => 'Invalid Spotify URL'], 400);
-        }
-
-        session([
-            'spotify_url' => $spotifyUrl,
-            'playlist_title' => $playlistTitle,
-        ]);
-
-        $playlistId = $this->extractPlaylistId($spotifyUrl);
-        if (!$playlistId) {
-            return response()->json(['error' => 'Invalid Spotify Playlist URL'], 400);
-        }
-
-        $spotifyTracks = $this->getSpotifyTracks($playlistId);
-        $youtubeLinks = $this->searchYouTube($spotifyTracks);
-
-        $authResponse = $this->createYouTubePlaylist($playlistTitle, $youtubeLinks);
-
-        if ($authResponse instanceof \Illuminate\Http\RedirectResponse) {
-            return $authResponse;
-        }
-
-        return response()->json([
-            'youtube_playlist_url' => "https://www.youtube.com/playlist?list={$authResponse}"
-        ]);
     }
 
     private function extractPlaylistId($url)
@@ -150,48 +141,76 @@ class PlaylistController extends Controller
         $client->setRedirectUri(env('GOOGLE_REDIRECT_URI'));
         $client->addScope("https://www.googleapis.com/auth/youtube");
         $client->setAccessType('offline');
+        $client->setPrompt('consent');
 
-        $authResponse = $this->getOAuthToken($client);
+        // Check for existing token
+        if (session()->has('youtube_access_token')) {
+            $accessToken = session('youtube_access_token');
+            $client->setAccessToken($accessToken);
 
-        if (is_string($authResponse)) {
-            return response()->json(['redirect_url' => $authResponse]);
+            // Check if token is expired
+            if ($client->isAccessTokenExpired()) {
+                if ($client->getRefreshToken()) {
+                    try {
+                        $client->fetchAccessTokenWithRefreshToken($client->getRefreshToken());
+                        session(['youtube_access_token' => $client->getAccessToken()]);
+                    } catch (\Exception $e) {
+                        // If refresh fails, redirect to auth
+                        session()->forget('youtube_access_token');
+                        return response()->json(['redirect_url' => $client->createAuthUrl()]);
+                    }
+                } else {
+                    // No refresh token, redirect to auth
+                    session()->forget('youtube_access_token');
+                    return response()->json(['redirect_url' => $client->createAuthUrl()]);
+                }
+            }
+        } else {
+            // No token, redirect to auth
+            return response()->json(['redirect_url' => $client->createAuthUrl()]);
         }
 
-        $client->setAccessToken($authResponse);
+        try {
+            $youtube = new GoogleYouTube($client);
 
-        $youtube = new GoogleYouTube($client);
+            $playlistSnippet = new YouTubePlaylistSnippet();
+            $playlistSnippet->setTitle($title);
+            $playlistSnippet->setDescription("Playlist converted from Spotify");
 
-        $playlistSnippet = new YouTubePlaylistSnippet();
-        $playlistSnippet->setTitle($title);
-        $playlistSnippet->setDescription("Playlist converted from Spotify");
+            $playlistStatus = new YouTubePlaylistStatus();
+            $playlistStatus->setPrivacyStatus('public');
 
-        $playlistStatus = new YouTubePlaylistStatus();
-        $playlistStatus->setPrivacyStatus('public');
+            $playlist = new YouTubePlaylist();
+            $playlist->setSnippet($playlistSnippet);
+            $playlist->setStatus($playlistStatus);
 
-        $playlist = new YouTubePlaylist();
-        $playlist->setSnippet($playlistSnippet);
-        $playlist->setStatus($playlistStatus);
+            $createdPlaylist = $youtube->playlists->insert('snippet,status', $playlist);
+            $playlistId = $createdPlaylist->getId();
 
-        $createdPlaylist = $youtube->playlists->insert('snippet,status', $playlist);
-        $playlistId = $createdPlaylist->getId();
+            foreach ($youtubeLinks as $videoUrl) {
+                $videoId = preg_replace('/https:\/\/www\.youtube\.com\/watch\?v=/', '', $videoUrl);
 
-        foreach ($youtubeLinks as $videoUrl) {
-            $videoId = preg_replace('/https:\/\/www\.youtube\.com\/watch\?v=/', '', $videoUrl);
+                $playlistItemSnippet = new YouTubePlaylistItemSnippet();
+                $playlistItemSnippet->setPlaylistId($playlistId);
+                $playlistItemSnippet->setResourceId(new YouTubeResourceId([
+                    'kind' => 'youtube#video',
+                    'videoId' => $videoId,
+                ]));
 
-            $playlistItemSnippet = new YouTubePlaylistItemSnippet();
-            $playlistItemSnippet->setPlaylistId($playlistId);
-            $playlistItemSnippet->setResourceId(new YouTubeResourceId([
-                'kind' => 'youtube#video',
-                'videoId' => $videoId,
-            ]));
+                $playlistItem = new YouTubePlaylistItem();
+                $playlistItem->setSnippet($playlistItemSnippet);
 
-            $playlistItem = new YouTubePlaylistItem();
-            $playlistItem->setSnippet($playlistItemSnippet);
+                $youtube->playlistItems->insert('snippet', $playlistItem);
+            }
 
-            $youtube->playlistItems->insert('snippet', $playlistItem);
+            return $playlistId;
+        } catch (\Exception $e) {
+            if (strpos($e->getMessage(), 'unauthorized') !== false) {
+                session()->forget('youtube_access_token');
+                return response()->json(['redirect_url' => $client->createAuthUrl()]);
+            }
+            throw $e;
         }
-
-        return $playlistId;
     }
 
     public function handleGoogleCallback(Request $request)
@@ -200,15 +219,26 @@ class PlaylistController extends Controller
         $client->setClientId(env('GOOGLE_CLIENT_ID'));
         $client->setClientSecret(env('GOOGLE_CLIENT_SECRET'));
         $client->setRedirectUri(env('GOOGLE_REDIRECT_URI'));
+        $client->addScope("https://www.googleapis.com/auth/youtube");
+        $client->setAccessType('offline');
 
-        if ($request->has('code')) {
-            $accessToken = $client->fetchAccessTokenWithAuthCode($request->input('code'));
-            session(['youtube_access_token' => $accessToken]);
+        try {
+            if ($request->has('code')) {
+                $token = $client->fetchAccessTokenWithAuthCode($request->input('code'));
 
-            return redirect('/test-convert')->with('success', 'YouTube authenticated successfully!');
+                if (isset($token['error'])) {
+                    throw new \Exception($token['error_description'] ?? 'Failed to get access token');
+                }
+
+                session(['youtube_access_token' => $token]);
+
+                return redirect('/test-convert')->with('success', 'YouTube authenticated successfully!');
+            }
+        } catch (\Exception $e) {
+            return redirect('/test-convert')->withErrors('Authentication failed: ' . $e->getMessage());
         }
 
-        return redirect('/')->withErrors('Failed to authenticate with YouTube.');
+        return redirect('/test-convert')->withErrors('Failed to authenticate with YouTube.');
     }
 
     private function getOAuthToken($client)
