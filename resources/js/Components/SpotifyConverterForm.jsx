@@ -44,7 +44,8 @@ const PlaylistConverter = () => {
 
         const formData = new FormData(e.target);
         const csrfToken = getCsrfToken();
-        const endpoint = action === "convert" ? "/convert" : "/api/search-playlist";
+        const endpoint =
+            action === "convert" ? "/convert" : "/api/search-playlist";
 
         if (!csrfToken) {
             setError("CSRF token not found. Please refresh the page.");
@@ -74,6 +75,11 @@ const PlaylistConverter = () => {
                     responseData.error ||
                         `HTTP error! status: ${response.status}`
                 );
+            }
+
+            if (responseData.redirect_url) {
+                window.location.href = responseData.redirect_url;
+                return;
             }
 
             setResult(responseData);
@@ -134,7 +140,7 @@ const PlaylistConverter = () => {
                                         id="playlist_title"
                                         name="playlist_title"
                                         placeholder="Nome da Playlist"
-                                        defaultValue="Converted Playlist"
+                                        defaultValue=""
                                         disabled={isLoading}
                                     />
                                 </div>
